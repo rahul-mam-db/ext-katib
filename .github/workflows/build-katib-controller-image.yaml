@@ -1,0 +1,84 @@
+name: "Kubeflow Katib: Build Katib Controller Image"
+
+on:
+  workflow_dispatch:
+
+env:
+  CONTAINER_IMAGE_NAME: "kubeflowkatib/katib-controller"
+  ARTIFACTORY_NAMESPACE: "com/db/saturn"
+  ARTIFACTORY_HOST: "artifactory.sdlc.ctl.gcp.db.com"
+  ARTIFACTORY_BASE_URL: "https://artifactory.sdlc.ctl.gcp.db.com"
+  PROJECT_ID: "db-dev-9bj1-mdk"
+
+jobs:
+  build:
+    name: Build & Push
+    runs-on: DBGDBC_DOCKER
+    permissions:
+      id-token: write
+      contents: read
+    container:
+      image: artifactory.sdlc.ctl.gcp.db.com/dkr-all/com/db/saturn/mdk-runner-tools:55677d6882d8eaae9517b57efea9f98b89f3f64b
+      
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        
+      - name: Environment Authentication (DEV)
+        uses: ./.github/actions/envauth
+        with:
+          WIF_PROVIDER:  ${{ secrets.DEFAULT_WIF_PROVIDER }}
+          WIF_SERVICE_ACCOUNT: ${{ fromJSON(secrets.PIPELINE_SERVICE_ACCOUNT_EMAILS)['dev/lz-secrets'] }}
+          GOOGLE_PROJECT_ID: ${{env.PROJECT_ID}}
+          GRADE: "dev" 
+                 
+      - id: secrets
+        uses: google-github-actions/get-secretmanager-secrets@v1
+        with:
+         secrets: |-
+          artifactory_releaser_username:db-dev-9bj1-mdk/ARTIFACTORY_RELEASER_USERNAME
+          artifactory_releaser_password:db-dev-9bj1-mdk/ARTIFACTORY_RELEASER_PASSWORD
+        
+      - name: Docker Login
+        env:
+          ARTIFACTORY_RELEASER_USERNAME: ${{ steps.secrets.outputs.artifactory_releaser_username }}
+          ARTIFACTORY_RELEASER_PASSWORD: ${{ steps.secrets.outputs.artifactory_releaser_password }}
+          ARTIFACTORY_URL: ${{ env.ARTIFACTORY_HOST }}
+        shell: bash
+        run: |
+           echo ${ARTIFACTORY_RELEASER_PASSWORD} | docker login --password-stdin --username ${ARTIFACTORY_RELEASER_USERNAME}  https://${ARTIFACTORY_URL}/
+      - name: Go Build
+        env:
+          ARTIFACTORY_USERNAME: ${{ steps.secrets.outputs.artifactory_releaser_username }}
+          ARTIFACTORY_PASSWORD: ${{ steps.secrets.outputs.artifactory_releaser_password }}
+          ARTIFACTORY_URL: ${{ env.ARTIFACTORY_BASE_URL }}
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+          GOPRIVATE: "github.com/qum4-o8qd/*"
+        run: |-
+          git config --global url."https://${PAT_TOKEN}:x-oauth-basic@github.com/".insteadOf "https://github.com/"
+          export GOPROXY="https://${ARTIFACTORY_USERNAME}:${ARTIFACTORY_PASSWORD}@artifactory.sdlc.ctl.gcp.db.com/artifactory/go-proxy"
+          export GONOSUMDB="4d63.com/*,bazil.org/*,bitbucket.org/*,cloud.google.com/*,contrib.go.opencensus.io/*,dmitri.shuralyov.com/*,github.com/*,go.etcd.io/*,go.mozilla.org/*,go.opencensus.io,go.opentelemetry.io/*,go.uber.org/*,go4.org/unsafe/*,golang.org/*,gomodules.xyz/*,gonum.org/*,google.golang.org/*,gopkg.in/*,gorgonia.org/*,gorm.io/,gotest.tools,gotest.tools/*,honnef.co/*,k8s.io/*,modernc.org/*,mvdan.cc/*,rsc.io/*,sigs.k8s.io/*"
+          go get github.com/qum4-o8qd/ext-kubeflow-katib
+          go get cloud.google.com/go/resourcemanager/apiv3
+          go mod tidy
+          echo "Go Build has started"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false -a -o katib-controller ./cmd/katib-controller/v1beta1
+          ls -la
+
+      - name: Docker Build & Push
+        env:
+          IMAGE_NAME: ${{ env.ARTIFACTORY_HOST }}/dkr-all/${{env.ARTIFACTORY_NAMESPACE}}/${{env.CONTAINER_IMAGE_NAME}}:${{ github.sha }}
+          ARTIFACTORY_RELEASER_USERNAME: ${{ steps.secrets.outputs.artifactory_releaser_username }}
+          ARTIFACTORY_RELEASER_PASSWORD: ${{ steps.secrets.outputs.artifactory_releaser_password }}
+          RELEASE_VERSION: ${{ github.sha }}
+
+        run: |-
+          echo "Starting docker build.."
+          
+          DOCKER_BUILDKIT=1 \
+          docker build -t $IMAGE_NAME . -f ./cmd/katib-controller/v1beta1/Dockerfile
+
+          docker images
+          
+          docker push $IMAGE_NAME
+          docker rmi $IMAGE_NAME
