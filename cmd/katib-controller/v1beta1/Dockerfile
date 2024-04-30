@@ -1,5 +1,5 @@
 # Build the Katib controller.
-FROM golang:alpine AS build-env
+FROM artifactory.sdlc.ctl.gcp.db.com/dkr-all/dkr-io/golang:1.22rc1-alpine3.19 AS build-env
 
 ARG TARGETARCH
 
@@ -18,7 +18,7 @@ COPY pkg/ pkg/
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -a -o katib-controller ./cmd/katib-controller/v1beta1
 
 # Copy the controller-manager into a thin image.
-FROM alpine:3.15
+FROM artifactory.sdlc.ctl.gcp.db.com/dkr-all/dkr-io/alpine:3.19.1
 WORKDIR /app
 COPY --from=build-env /go/src/github.com/kubeflow/katib/katib-controller .
 ENTRYPOINT ["./katib-controller"]
